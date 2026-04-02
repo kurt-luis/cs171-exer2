@@ -1,8 +1,12 @@
 #include <iostream>
+#include <vector>
 #include <random>
 #include <math.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
+
+#define TILE_SIZE 16
+
 using namespace std;
 
 template <typename T>
@@ -55,12 +59,65 @@ __global__ void matmul_rec_glob(float *A, float *B, float *C, int N, int M, int 
 		{
 			int A_idx = row * K + i;
 			int B_idx = col + i * M;
-			sum = sum + A[A_idx] * B[B_idx];
+			sum += A[A_idx] * B[B_idx];
 		}
 
 		int C_idx = row * M + col;
 		C[C_idx] = sum;
 	}
+}
+
+__global__ void matmul_rec_shar(float *A, float *B, float *C, int N, int M, int K)
+{
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    __shared__ float A_shared[TILE_SIZE][TILE_SIZE];
+    __shared__ float B_shared[TILE_SIZE][TILE_SIZE];
+	
+    float sum = 0.0f;
+
+    for (int i = 0; i < (K + TILE_SIZE - 1) / TILE_SIZE; i++)
+    {
+		int A_col = i * TILE_SIZE + threadIdx.x;
+
+		if (row < N && A_col < K)
+		{
+			A_shared[threadIdx.y][threadIdx.x] = A[row * K + A_col];
+		}
+
+		else
+		{
+			A_shared[threadIdx.y][threadIdx.x] = 0.0f;
+		}
+
+
+		int B_row = i * TILE_SIZE + threadIdx.y;
+
+		if (B_row < K && col < M)
+		{
+			B_shared[threadIdx.y][threadIdx.x] = B[B_row * M + col];
+		}
+
+		else
+		{
+			B_shared[threadIdx.y][threadIdx.x] = 0.0f;
+		}
+
+		__syncthreads();
+        
+        for (int j = 0; j < TILE_SIZE; j++)
+		{
+			sum += A_shared[threadIdx.y][j] * B_shared[j][threadIdx.x];
+		}
+
+		__syncthreads();
+    }
+
+    if (row < N && col < M)
+    {
+        C[row * M + col] = sum;
+    }
 }
 
 void matMul(float *A_h, float *B_h, float *C_h, int N, int M, int K)
@@ -74,11 +131,49 @@ void matMul(float *A_h, float *B_h, float *C_h, int N, int M, int K)
 	cudaMemcpy(A_d, A_h, N * K * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(B_d, B_h, K * M * sizeof(float), cudaMemcpyHostToDevice);
 
-	dim3 threadsPerBlock(16, 16);
+	dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
 	dim3 numBlocks((M + threadsPerBlock.x - 1) / threadsPerBlock.x, 
                (N + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-	matmul_rec_glob<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, N, M, K);
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+	float totalTimeGlobal = 0.0f, totalTimeShared = 0.0f;
+	int numRuns = 10;
+
+	for (int i = 0; i < numRuns; i++)
+	{
+		cudaEventRecord(start);
+
+		matmul_rec_glob<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, N, M, K);
+
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+
+		float milliseconds = 0;
+		cudaEventElapsedTime(&milliseconds, start, stop);
+		
+		totalTimeGlobal += milliseconds;
+
+
+		cudaEventRecord(start);
+
+		matmul_rec_shar<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, N, M, K);
+
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+
+		milliseconds = 0;
+		cudaEventElapsedTime(&milliseconds, start, stop);
+		
+		totalTimeShared += milliseconds;		
+	}
+
+	float avgTimeGlobal = totalTimeGlobal / numRuns;
+	float avgTimeShared = totalTimeShared / numRuns;
+
+	printf("Matrix Multiplication of %d x %d and %d x %d.\nGlobal Average: %f ms, Shared Average: %f ms\n\n", N, K, K, M, avgTimeGlobal, avgTimeShared);
 
 	cudaMemcpy(C_h, C_d, N * M * sizeof(float), cudaMemcpyDeviceToHost);
 
@@ -87,51 +182,46 @@ void matMul(float *A_h, float *B_h, float *C_h, int N, int M, int K)
     cudaFree(C_d);
 }
 
-void printMatrix(const char* name, float* mat, int rows, int cols)
-{
-    printf("Matrix %s (%d x %d):\n", name, rows, cols);
-    for (int r = 0; r < rows; r++)
-    {
-        for (int c = 0; c < cols; c++)
-        {
-            int idx = r * cols + c;
-            printf("%6.1f ", mat[idx]); 
-        }
-        printf("\n");
-    }
-    printf("--------------------------------------------------\n");
-}
-
 int main()
 {
     queryDevice();
-    
-	int N = 3;
-	int M = 4;
-	int K = 2;
 
-	float *A_h = new float[N * K];
-	float *B_h = new float[K * M];
+	vector<vector<int>> test_dimensions = {
+		{256, 256, 256},
+		{256, 256, 512},
+		{512, 512, 512},
+		{512, 512, 1024},
+		{1024, 1024, 1024},
+		{1024, 1024, 2048},
+		{2048, 2048, 2048},
+	};
 
-	// If A is NxK and B is KxM then C is NxM
-	float *C_h = new float[N * M];
+	int N, M, K;
 
-	randomizeElements(A_h, N, K);
-	randomizeElements(B_h, K, M);
-
-	printMatrix("A", A_h, N, K);
-    printMatrix("B", B_h, K, M);
-
-	matMul(A_h, B_h, C_h, N, M, K);
-
-	for (int i = 0; i < N * M; i++)
+	for (int test = 0; test < 7; test++)
 	{
-		printf("Element %d of matrix C is %.1f\n", i, C_h[i]);
-	}
+		printf("Test %d:\n", test + 1);
+		
+		N = test_dimensions[test][0];
+		M = test_dimensions[test][1];
+		K = test_dimensions[test][2];
 
-	delete[] A_h;
-    delete[] B_h;
-    delete[] C_h;
+		float *A_h = new float[N * K];
+		float *B_h = new float[K * M];
+
+		// If A is NxK and B is KxM then C is NxM
+		float *C_h = new float[N * M];
+
+		randomizeElements(A_h, N, K);
+		randomizeElements(B_h, K, M);
+
+		matMul(A_h, B_h, C_h, N, M, K);
+
+		delete[] A_h;
+		delete[] B_h;
+		delete[] C_h;
+	}
+    
 
     return 0;
 }

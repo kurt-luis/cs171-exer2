@@ -30,6 +30,8 @@ void queryDevice()
 	printf("Warp size: %d\n", props.warpSize);
 	printf("SM Count: %d\n", props.multiProcessorCount);
 	printf("Max Threads per Block: %d\n", props.maxThreadsPerBlock);
+	printf("Max Threads per SM: %d\n", props.maxThreadsPerMultiProcessor);
+	printf("Max Blocks per SM: %d\n", props.maxBlocksPerMultiProcessor);
 	cout << "==================================================================\n";
 }
 

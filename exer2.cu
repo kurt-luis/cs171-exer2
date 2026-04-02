@@ -33,12 +33,12 @@ void queryDevice()
 	cout << "==================================================================\n";
 }
 
-void randomizeElements(float *mat, int n)
+void randomizeElements(float *mat, int N, int M)
 {
 	random_device rd;
 	mt19937 gen(rd());
 	uniform_real_distribution<float> dist(0.0f, 100.0f);
-	for (int i = 0; i < n * n; i++)
+	for (int i = 0; i < N * M; i++)
 	{
 		mat[i] = dist(gen);
 	}

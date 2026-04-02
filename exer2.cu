@@ -177,6 +177,9 @@ void matMul(float *A_h, float *B_h, float *C_h, int N, int M, int K)
 
 	cudaMemcpy(C_h, C_d, N * M * sizeof(float), cudaMemcpyDeviceToHost);
 
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+
 	cudaFree(A_d);
     cudaFree(B_d);
     cudaFree(C_d);

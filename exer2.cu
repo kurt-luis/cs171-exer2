@@ -33,17 +33,15 @@ void queryDevice()
 	cout << "==================================================================\n";
 }
 
-void randomizeElements(float *mat, int n, int m)
+void randomizeElements(float *mat, int N, int M)
 {
 	random_device rd;
-    mt19937 gen(rd());
-
-    uniform_int_distribution<int> dist(0, 10); 
-
-    for (int i = 0; i < n * m; i++)
-    {
-        mat[i] = static_cast<float>(dist(gen)); 
-    }
+	mt19937 gen(rd());
+	uniform_real_distribution<float> dist(0.0f, 100.0f);
+	for (int i = 0; i < N * M; i++)
+	{
+		mat[i] = dist(gen);
+	}
 }
 
 __global__ void matmul_rec_glob(float *A, float *B, float *C, int N, int M, int K)
@@ -177,6 +175,9 @@ void matMul(float *A_h, float *B_h, float *C_h, int N, int M, int K)
 
 	cudaMemcpy(C_h, C_d, N * M * sizeof(float), cudaMemcpyDeviceToHost);
 
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+
 	cudaFree(A_d);
     cudaFree(B_d);
     cudaFree(C_d);
@@ -222,6 +223,5 @@ int main()
 		delete[] C_h;
 	}
     
-
     return 0;
 }
